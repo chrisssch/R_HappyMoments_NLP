@@ -1,0 +1,196 @@
+---
+title: "Happy Moments - Text Mining"
+author: "Christoph Schauer"
+date: "22 July 2018"
+output: html_document
+---
+
+  
+## Introduction
+
+The purpose of this project is to practicing text classification with an unsupervised learning method on a real-world dataset using the [tidytext package](https://www.tidytextmining.com/), and perhaps at a later date with supervised models as well (TBD). This dataset is "HappyDB: A Corpus of 100,000 Crowdsourced Happy Moments", created by Asai et al. in 2018. From the description:
+
+*HappyDB is a corpus of more than 100,000 happy moments crowd-sourced via Amazon’s Mechanical Turk.
+
+*Each worker is given the following task: What made you happy today? Reflect on the past 24 hours, and recall three actual events that happened to you that made you happy. Write down your happy moment in a complete sentence. (Write three such moments.)*
+
+*The goal of the corpus is to advance the understanding of the causes of happiness through text-based reflection.*
+
+More information on the HappyDB project and the data is available on [kaggle](https://www.kaggle.com/ritresearch/happydb) and the [HappyDB project website](https://rit-public.github.io/HappyDB/), from where the data was downloaded.
+
+
+## Load and prepare data
+
+#### Load libraries:
+
+```{r, message = FALSE}
+library(readr)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(ggplot2)
+library(wordcloud)
+library(knitr)
+library(caret)
+```
+
+#### Load data on the "happy moments" and demographic data from csv files in a folder in the working directory and do some basic preprocessing: 
+
+```{r, message = FALSE}
+cleaned_hm = read_csv("happydb/data/cleaned_hm.csv")
+demographics = read_csv("happydb/data/demographic.csv")
+
+hm = inner_join(cleaned_hm, demographics) %>%
+     mutate(description = str_replace_all(cleaned_hm, "\r\n", " "),
+            age = as.integer(age),
+            country = as.factor(country),
+            gender = as.factor(gender),
+            marital = as.factor(marital),
+            parenthood = as.factor(parenthood)) %>%
+     select(hmid, wid, description, ground_truth_category, age:parenthood)
+```
+
+#### Load dictionaries from csv files in the same folder:
+
+```{r}
+filelist = list.files("happydb/data/topic_dict", full.names = TRUE)
+dictionaries = tibble()
+for (i in 1:9) {
+     file_i = read_tsv(filelist[i], col_names = FALSE, col_types = cols(X1 = col_character()))
+     colnames(file_i) = "keyword"
+     file_i$topic = str_remove_all(filelist[i], "^happydb/data/topic_dict/|-dict.csv$")
+     dictionaries = rbind(dictionaries, file_i)
+}
+```
+
+
+## Data summary
+
+```{r}
+kable(head(hm), caption = "The HappyDB dataset")
+```
+
+The demographic information consists of age, country, gender, marital and parental status of the respondents.
+
+HappyDB includes dictionaries which match key words to one of 9 categories:
+
+```{r}
+kable(dictionaries %>% group_by(topic) %>% count(topic), caption = "Number of keywords per topic")
+```
+
+A word cloud of the most frequent words occuring in the descriptions of the happy moments, other than "happy" itself, any numbers, and common English stop words. These stop words were removed using the stop_words dictionary that is part of the tidytext package:
+
+```{r, message = FALSE}
+top_words = hm %>%
+     mutate(description = str_remove_all(description, "\\d+")) %>%
+     unnest_tokens(word, description, token = "words") %>%
+     count(word, sort = TRUE) %>%
+     anti_join(stop_words)
+
+wordcloud(top_words$word[2:101], top_words$n[2:101], scale = c(5,0.5), min.freq = 1, rot.per = 0.25, 
+          random.order = FALSE, colors = brewer.pal(11, "RdYlBu"))
+```
+
+## "Happy Moments" Classification - Unsupervised learning
+
+#### Data processing
+
+The following code tokenizes each description of a observation - each "happy moment" - by words using the tidytext package and classifies each observation by the category that appears most frequently in its description. The code also generates a document term matrix with the frequency of each description.
+
+```{r, message = FALSE}
+hm2 = hm %>%
+     unnest_tokens(word, description, token = "words") %>%
+     inner_join(dictionaries, by = c("word" = "keyword")) %>%
+     group_by(wid, hmid) %>% 
+     count(topic) %>%
+     inner_join(hm) %>%
+     filter(min_rank(desc(n)) == 1) %>%
+     group_by(hmid) %>% 
+     mutate(duplicates = n()) %>%
+     spread(key = topic, value = topic, fill = "0") %>%
+     mutate(topic = str_c(entertainment, exercise, family, food, people, pets, shopping, work, sep = " ") %>%
+                 str_remove_all("0") %>% str_squish()) %>%
+     select(-ground_truth_category)
+
+for (i in 11:19) {
+     hm2[,i] = str_replace_all(as.character(unlist(hm2[,i])), "[a-z]+", "1")
+     hm2[,i] = as.integer(as.character(unlist(hm2[,i])))
+}
+```
+
+Ties - keywords from two categories appearing equally frequently - are handled by creating a new combined category and are marked by the column "duplicates". Of the 74596 observations remaining in the data set, 27105 observations could not be categorized unambigously with this (basic) method:
+
+```{r} 
+length(hm2$hmid[hm2$duplicates == 1]) # number of moments without duplicate topic
+length(unique(hm2$hmid[hm2$duplicates > 1])) # number of moments with duplicate topic
+```
+
+There are particularly many ties between the category family and people, as family members typically are people too, and many keywords are shared between these two dictionaries.
+
+#### Results
+
+The classifier categorizes most "happy moments" as being related to food and people:
+
+```{r}
+top_topics = hm2 %>% 
+     select(hmid, topic, n, duplicates) %>%  
+     filter(duplicates == 1 | topic == "family people" ) 
+ggplot(data = top_topics) + geom_bar(aes(x = topic, fill = topic)) + 
+     theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+The least frequent reason for why people experienced such moments appear to be family. However, due to the overlap in keywords in the two dictionaries, and with "people" being the broader category, it is very unlikely that the category "family" is attributed to an observation even if only family members appear as keywords in the description. Indeed, the category "family & people" is almost as frequent as "people" alone.
+
+Having two dictionaries with such huge overlaps in the data is probably unfortunate for the purpose of text classification, and it would be good to separate them better, e.g. in family and other relationships.
+
+The overall most frequently appearing keywords belong to the same three categories people, family, and food:
+
+```{r}
+top_topics = hm %>%
+     select(description) %>%
+     unnest_tokens(word, description, token = "words") %>%
+     inner_join(dictionaries, by = c("word" = "keyword"))
+ggplot(data = top_topics) + geom_bar(aes(x = topic, fill = topic)) +
+     theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Again, the overlap between people and family distort results here a bit. Nevertheless, what makes us, the social creatures that humans are, really happy appears to be social bonds - other humans. And food - which in the descriptions is often appearing in a social context as well.   
+
+A casual inspection of the a couply of randomly sampled happy moments suggests that this algorithm seems to be doing alright in classifying these happy moments:
+
+```{r, message = FALSE}
+set.seed(123)
+evaluation = inner_join(hm, hm2) %>% 
+     filter(duplicates == 1) %>% 
+     select(hmid, description, topic) %>% 
+     sample_n(25)
+kable(evaluation, caption = "Sample of 25 classified happy moments")
+```
+
+
+## Classification with Supervised Learning: TBD
+
+#### Preprocessing
+
+The following code creates a dataframe with the demographic information and a bag of words/document term matrix (sort of) of the words of all descriptions, minus the stop words, of each observation. This dataset contains only observations for which there was a ground truth category provided in the HappyDB dataset, which is true for 14125 observations. 
+The "document term matrix" is created using tidyr. This is a rather makeshift method and not the ideal way for doing that: It scales poorly to larger datasets and is inefficient in terms of storage, as it does not create a sparse matrix. However, it still works well enough for this relatively small dataset - the dataframe created is only around 1 GB - and doesn't require using dedicated text mining packages such as TM.
+
+```{r, message = FALSE}
+data(stop_words)
+hm3 = hm %>%
+     filter(ground_truth_category != is.na(ground_truth_category)) %>%
+     mutate(ground_truth_category = as.factor(ground_truth_category),
+            description = str_replace_all(description, "\\.", " ")) %>%
+     unnest_tokens(word, description, token = "words") %>%
+     anti_join(stop_words) %>%
+     group_by(hmid, wid, ground_truth_category, age, country, gender, marital, parenthood) %>% 
+     count(word) %>%
+     spread(key = word, value = n, fill = 0)
+```
+
+The resulting data set has 9394 columns, that is, almost 9400 unique words, plus a dozen columns or so with ID and demographic information:
+
+#### Training and prediction
+
+TBD
