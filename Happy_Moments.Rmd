@@ -8,7 +8,7 @@ output: html_document
   
 ## Introduction
 
-The purpose of this project is to practicing text classification with an unsupervised learning method on a real-world dataset using the [tidytext package](https://www.tidytextmining.com/), and perhaps at a later date with supervised models as well (TBD). This dataset is "HappyDB: A Corpus of 100,000 Crowdsourced Happy Moments", created by Asai et al. in 2018. From the description:
+The purpose of this project is to practice text classification with an unsupervised learning method on a real-world dataset using the [tidytext package](https://www.tidytextmining.com/), and perhaps at a later date with supervised models as well (TBD). This dataset is "HappyDB: A Corpus of 100,000 Crowdsourced Happy Moments", created by Asai et al. in 2018. From the description:
 
 *HappyDB is a corpus of more than 100,000 happy moments crowd-sourced via Amazon’s Mechanical Turk.
 
